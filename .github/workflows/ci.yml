@@ -24,7 +24,7 @@ jobs:
           GOOGLE_CLIENT_ID: ci-client-id
           GOOGLE_CLIENT_SECRET: ci-client-secret
           GOOGLE_REDIRECT_URI: http://127.0.0.1:8765/auth/google/callback
-          SESSION_SECRET: 01234567890123456789012345678901
+          SESSION_SECRET: ci-session-secret-32chars-min!!
           ALLOWED_EMAIL: ci@example.com
           GITHUB_TOKEN: ghp_ci_token_placeholder_value
           NODE_ENV: production
@@ -46,7 +46,7 @@ jobs:
           GOOGLE_CLIENT_ID: ci-client-id
           GOOGLE_CLIENT_SECRET: ci-client-secret
           GOOGLE_REDIRECT_URI: http://127.0.0.1:8766/auth/google/callback
-          SESSION_SECRET: 01234567890123456789012345678901
+          SESSION_SECRET: ci-session-secret-32chars-min!!
           ALLOWED_EMAIL: ci@example.com
           GITHUB_TOKEN: ghp_ci_token_placeholder_value
         run: |
