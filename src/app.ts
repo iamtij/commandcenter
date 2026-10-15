@@ -1,10 +1,13 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
-import session from "express-session";
 import { OAuth2Client } from "google-auth-library";
+import { createOAuthState, verifyOAuthState } from "./auth/oauth-state.js";
 import type { AppEnv } from "./config.js";
 import { TtlCache } from "./cache.js";
 import { requireAuth } from "./middleware/auth.js";
-import { securityHeaders } from "./middleware/security.js";
+import { createSecurityHeaders } from "./middleware/security.js";
+import { createSessionMiddleware } from "./session-store.js";
 import {
   CACHE_TTL_MS,
   assembleDashboard,
@@ -13,10 +16,21 @@ import {
 import type { DashboardData } from "./types.js";
 import { renderForbidden, renderPage } from "./views/html.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 export type AppDeps = {
   fetchImpl?: typeof fetch;
   oauth2Factory?: (env: AppEnv) => OAuth2Client;
 };
+
+type GoogleProfile = {
+  email?: string;
+  verified_email?: boolean;
+};
+
+function isEmailVerified(profile: GoogleProfile): boolean {
+  return profile.verified_email === true;
+}
 
 export function createApp(env: AppEnv, deps: AppDeps = {}) {
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -33,23 +47,12 @@ export function createApp(env: AppEnv, deps: AppDeps = {}) {
   const dashboardCache = new TtlCache<DashboardData>(CACHE_TTL_MS);
 
   app.set("trust proxy", 1);
-  app.use(securityHeaders);
+  app.use(createSecurityHeaders(env));
   app.use(express.urlencoded({ extended: false }));
-
   app.use(
-    session({
-      name: "cc.sid",
-      secret: env.sessionSecret,
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        httpOnly: true,
-        secure: env.nodeEnv === "production",
-        sameSite: "lax",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      },
-    }),
+    express.static(path.join(__dirname, "..", "public")),
   );
+  app.use(createSessionMiddleware(env));
 
   app.get("/health", (_req, res) => {
     res.status(200).json({ ok: true });
@@ -61,17 +64,30 @@ export function createApp(env: AppEnv, deps: AppDeps = {}) {
     "https://www.googleapis.com/auth/userinfo.email",
   ];
 
-  app.get("/auth/google", (_req, res) => {
+  app.get("/auth/google", (req, res) => {
+    const state = createOAuthState();
+    req.session.oauthState = state;
     const url = oauth2.generateAuthUrl({
       access_type: "online",
       prompt: "select_account",
       scope: scopes,
+      state,
     });
     res.redirect(url);
   });
 
   app.get("/auth/google/callback", async (req, res) => {
     const code = typeof req.query.code === "string" ? req.query.code : null;
+    const receivedState =
+      typeof req.query.state === "string" ? req.query.state : null;
+    const expectedState = req.session.oauthState;
+    delete req.session.oauthState;
+
+    if (!verifyOAuthState(receivedState, expectedState)) {
+      res.status(400).send("Invalid OAuth state");
+      return;
+    }
+
     if (!code) {
       res.status(400).send("Missing authorization code");
       return;
@@ -95,10 +111,17 @@ export function createApp(env: AppEnv, deps: AppDeps = {}) {
         return;
       }
 
-      const profile = (await userRes.json()) as { email?: string };
+      const profile = (await userRes.json()) as GoogleProfile;
       const email = profile.email?.trim().toLowerCase();
       if (!email) {
         res.status(502).send("Google profile missing email");
+        return;
+      }
+
+      if (!isEmailVerified(profile)) {
+        req.session.destroy(() => {
+          res.status(403).send(renderForbidden());
+        });
         return;
       }
 
@@ -109,12 +132,21 @@ export function createApp(env: AppEnv, deps: AppDeps = {}) {
         return;
       }
 
-      req.session.user = {
+      const userSession = {
         email,
         googleAccessToken: tokens.access_token,
       };
-      dashboardCache.delete(email);
-      res.redirect("/");
+
+      req.session.regenerate((regenErr) => {
+        if (regenErr) {
+          res.status(500).send("Sign-in failed");
+          return;
+        }
+
+        req.session.user = userSession;
+        dashboardCache.delete(email);
+        res.redirect("/");
+      });
     } catch {
       res.status(500).send("Sign-in failed");
     }

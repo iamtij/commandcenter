@@ -19,7 +19,8 @@ Copy `.env.example` and set:
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `GOOGLE_REDIRECT_URI` | OAuth redirect URL (e.g. `https://your-app.up.railway.app/auth/google/callback`) |
-| `SESSION_SECRET` | Long random string for signing the session cookie |
+| `SESSION_SECRET` | Random string **at least 32 characters** for signing the session cookie |
+| `SESSION_STORE_PATH` | Optional. Directory for production session files (default `./data/sessions`) |
 | `ALLOWED_EMAIL` | Only this Google account may sign in |
 | `GITHUB_TOKEN` | Fine-grained or classic token with read access to the three repos |
 | `PORT` | HTTP port (Railway sets this automatically) |
@@ -61,5 +62,8 @@ Open `http://localhost:3000` (or your `PORT`).
 ## Security
 
 - Session cookie: `httpOnly`, `secure` in production, `sameSite=lax`, signed with `SESSION_SECRET`
-- Headers: `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`
+- **Production sessions** use `session-file-store` (files under `SESSION_STORE_PATH`) so sessions survive process restarts without Redis or another database. Development and tests use the in-memory store.
+- Google OAuth uses a cryptographically random `state` parameter (single-use, timing-safe verification).
+- Login requires a **verified** Google email and calls `req.session.regenerate()` after success (session fixation mitigation).
+- Headers: `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`, `Content-Security-Policy` (`default-src 'self'; script-src 'none'; style-src 'self'; frame-ancestors 'none'`), and `Strict-Transport-Security` in production.
 - Read-only: no write actions to Calendar, GitHub, or any other source

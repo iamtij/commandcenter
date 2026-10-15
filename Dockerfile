@@ -4,6 +4,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci
 COPY tsconfig.json eslint.config.js ./
 COPY src ./src
+COPY public ./public
 RUN npm run build && npm prune --omit=dev
 
 FROM node:20-alpine
@@ -12,5 +13,6 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/public ./public
 EXPOSE 3000
 CMD ["node", "dist/server.js"]

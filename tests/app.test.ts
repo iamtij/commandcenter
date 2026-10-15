@@ -3,7 +3,14 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { AppEnv } from "../src/config.js";
-import { testEnv } from "./helpers.js";
+import {
+  captureOAuthState,
+  completeOAuthCallback,
+  mockAuthedFetch,
+  sessionCookieValue,
+  testEnv,
+  verifiedProfile,
+} from "./helpers.js";
 
 describe("Command Center app", () => {
   let env: AppEnv;
@@ -17,12 +24,15 @@ describe("Command Center app", () => {
     env = testEnv();
     fetchMock = vi.fn();
     oauthMock = {
-      generateAuthUrl: vi.fn(() => "https://accounts.google.com/o/oauth2/v2/auth"),
+      generateAuthUrl: vi.fn((opts: { state?: string }) => {
+        return `https://accounts.google.com/o/oauth2/v2/auth?state=${opts.state ?? ""}`;
+      }),
       getToken: vi.fn(),
     };
   });
 
-  function buildApp() {
+  function buildApp(overrides: Partial<AppEnv> = {}) {
+    env = testEnv(overrides);
     const { app } = createApp(env, {
       fetchImpl: fetchMock as unknown as typeof fetch,
       oauth2Factory: () => oauthMock as never,
@@ -45,19 +55,80 @@ describe("Command Center app", () => {
     expect(res.status).toBe(401);
   });
 
+  it("rejects OAuth callback when state is missing or mismatched", async () => {
+    const app = buildApp();
+    const agent = request.agent(app);
+    await agent.get("/auth/google");
+    const state = captureOAuthState(oauthMock);
+
+    const missing = await agent.get("/auth/google/callback?code=abc");
+    expect(missing.status).toBe(400);
+    expect(missing.text).toContain("Invalid OAuth state");
+
+    await agent.get("/auth/google");
+    const mismatched = await completeOAuthCallback(
+      agent,
+      `${state}-wrong`,
+    );
+    expect(mismatched.status).toBe(400);
+    expect(mismatched.text).toContain("Invalid OAuth state");
+  });
+
   it("returns 403 for a non-allowlisted Google email", async () => {
     oauthMock.getToken.mockResolvedValue({
       tokens: { access_token: "ya29.access" },
     });
     fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ email: "intruder@example.com" }),
+      json: async () => verifiedProfile("intruder@example.com"),
     });
 
     const app = buildApp();
-    const res = await request(app).get("/auth/google/callback?code=abc");
+    const agent = request.agent(app);
+    await agent.get("/auth/google");
+    const state = captureOAuthState(oauthMock);
+    const res = await completeOAuthCallback(agent, state);
     expect(res.status).toBe(403);
     expect(res.text).toContain("403 Forbidden");
+  });
+
+  it("returns 403 for an unverified Google email", async () => {
+    oauthMock.getToken.mockResolvedValue({
+      tokens: { access_token: "ya29.access" },
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        email: env.allowedEmail,
+        verified_email: false,
+      }),
+    });
+
+    const app = buildApp();
+    const agent = request.agent(app);
+    await agent.get("/auth/google");
+    const state = captureOAuthState(oauthMock);
+    const res = await completeOAuthCallback(agent, state);
+    expect(res.status).toBe(403);
+    expect(res.text).toContain("403 Forbidden");
+  });
+
+  it("changes the session cookie after successful login", async () => {
+    const app = buildApp();
+    const agent = request.agent(app);
+    const oauthRes = await agent.get("/auth/google");
+    const cookieBefore = sessionCookieValue(oauthRes.headers["set-cookie"]);
+    const state = captureOAuthState(oauthMock);
+    oauthMock.getToken.mockResolvedValue({
+      tokens: { access_token: "ya29.access" },
+    });
+    mockAuthedFetch(fetchMock, env);
+    const loginRes = await completeOAuthCallback(agent, state);
+    const cookieAfter = sessionCookieValue(loginRes.headers["set-cookie"]);
+
+    expect(cookieBefore).toBeDefined();
+    expect(cookieAfter).toBeDefined();
+    expect(cookieAfter).not.toBe(cookieBefore);
   });
 
   it("does not leak token strings in HTML or JSON responses", async () => {
@@ -68,7 +139,7 @@ describe("Command Center app", () => {
       if (url.includes("userinfo")) {
         return {
           ok: true,
-          json: async () => ({ email: env.allowedEmail }),
+          json: async () => verifiedProfile(env.allowedEmail),
         };
       }
       if (url.includes("googleapis.com/calendar")) {
@@ -85,7 +156,9 @@ describe("Command Center app", () => {
 
     const app = buildApp();
     const agent = request.agent(app);
-    await agent.get("/auth/google/callback?code=abc");
+    await agent.get("/auth/google");
+    const state = captureOAuthState(oauthMock);
+    await completeOAuthCallback(agent, state);
 
     const html = await agent.get("/").set("Accept", "text/html");
     expect(html.status).toBe(200);
@@ -112,7 +185,7 @@ describe("Command Center app", () => {
       if (url.includes("userinfo")) {
         return {
           ok: true,
-          json: async () => ({ email: env.allowedEmail }),
+          json: async () => verifiedProfile(env.allowedEmail),
         };
       }
       if (url.includes("googleapis.com/calendar")) {
@@ -126,7 +199,9 @@ describe("Command Center app", () => {
 
     const app = buildApp();
     const agent = request.agent(app);
-    await agent.get("/auth/google/callback?code=abc");
+    await agent.get("/auth/google");
+    const state = captureOAuthState(oauthMock);
+    await completeOAuthCallback(agent, state);
     const res = await agent.get("/").set("Accept", "text/html");
     expect(res.text).toContain("Couldn't load");
   });
@@ -141,7 +216,7 @@ describe("Command Center app", () => {
       if (url.includes("userinfo")) {
         return {
           ok: true,
-          json: async () => ({ email: env.allowedEmail }),
+          json: async () => verifiedProfile(env.allowedEmail),
         };
       }
       if (url.includes("googleapis.com/calendar")) {
@@ -168,7 +243,9 @@ describe("Command Center app", () => {
 
     const app = buildApp();
     const agent = request.agent(app);
-    await agent.get("/auth/google/callback?code=abc");
+    await agent.get("/auth/google");
+    const state = captureOAuthState(oauthMock);
+    await completeOAuthCallback(agent, state);
 
     calendarCalls = 0;
     await agent.get("/api/dashboard").set("Accept", "application/json");
@@ -181,5 +258,26 @@ describe("Command Center app", () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
+  });
+
+  it("sets CSP and HSTS security headers in production", async () => {
+    const app = buildApp({ nodeEnv: "production" });
+    const res = await request(app).get("/health");
+    expect(res.headers["content-security-policy"]).toBe(
+      "default-src 'self'; script-src 'none'; style-src 'self'; frame-ancestors 'none'",
+    );
+    expect(res.headers["strict-transport-security"]).toBe(
+      "max-age=31536000; includeSubDomains",
+    );
+  });
+
+  it("stores OAuth state in generateAuthUrl", async () => {
+    const app = buildApp();
+    await request(app).get("/auth/google");
+    const call = oauthMock.generateAuthUrl.mock.calls.at(-1)?.[0] as {
+      state?: string;
+    };
+    expect(call.state).toBeTruthy();
+    expect(call.state!.length).toBeGreaterThan(20);
   });
 });
