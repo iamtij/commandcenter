@@ -74,6 +74,25 @@ describe("Command Center app", () => {
     expect(mismatched.text).toContain("Invalid OAuth state");
   });
 
+  it("rejects replay of a used OAuth state with 400", async () => {
+    oauthMock.getToken.mockResolvedValue({
+      tokens: { access_token: "ya29.access" },
+    });
+    mockAuthedFetch(fetchMock, env);
+
+    const app = buildApp();
+    const agent = request.agent(app);
+    await agent.get("/auth/google");
+    const state = captureOAuthState(oauthMock);
+
+    const first = await completeOAuthCallback(agent, state);
+    expect(first.status).toBe(302);
+
+    const replay = await completeOAuthCallback(agent, state);
+    expect(replay.status).toBe(400);
+    expect(replay.text).toContain("Invalid OAuth state");
+  });
+
   it("returns 403 for a non-allowlisted Google email", async () => {
     oauthMock.getToken.mockResolvedValue({
       tokens: { access_token: "ya29.access" },

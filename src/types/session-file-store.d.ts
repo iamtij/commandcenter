@@ -3,6 +3,7 @@ declare module "session-file-store" {
 
   type FileStoreOptions = {
     path?: string;
+    secret?: string;
     ttl?: number;
     logFn?: (...args: unknown[]) => void;
   };

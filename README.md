@@ -62,7 +62,7 @@ Open `http://localhost:3000` (or your `PORT`).
 ## Security
 
 - Session cookie: `httpOnly`, `secure` in production, `sameSite=lax`, signed with `SESSION_SECRET`
-- **Production sessions** use `session-file-store` (files under `SESSION_STORE_PATH`) so sessions survive process restarts without Redis or another database. Development and tests use the in-memory store.
+- **Production sessions** use `session-file-store` (files under `SESSION_STORE_PATH`, encrypted with `SESSION_SECRET`) so sessions survive process restarts without Redis or another database. Development and tests use the in-memory store.
 - Google OAuth uses a cryptographically random `state` parameter (single-use, timing-safe verification).
 - Login requires a **verified** Google email and calls `req.session.regenerate()` after success (session fixation mitigation).
 - Headers: `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`, `Content-Security-Policy` (`default-src 'self'; script-src 'none'; style-src 'self'; frame-ancestors 'none'`), and `Strict-Transport-Security` in production.

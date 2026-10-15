@@ -21,6 +21,7 @@ export function createSessionMiddleware(env: AppEnv) {
   if (env.nodeEnv === "production") {
     options.store = new FileStore({
       path: env.sessionStorePath,
+      secret: env.sessionSecret,
       ttl: 7 * 24 * 60 * 60,
       logFn: () => {},
     });
