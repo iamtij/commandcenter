@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Smoke test built server
+        env:
+          GOOGLE_CLIENT_ID: ci-client-id
+          GOOGLE_CLIENT_SECRET: ci-client-secret
+          GOOGLE_REDIRECT_URI: http://127.0.0.1:8765/auth/google/callback
+          SESSION_SECRET: ci-session-secret-at-least-32-chars-long
+          ALLOWED_EMAIL: ci@example.com
+          GITHUB_TOKEN: ghp_ci_token_placeholder_value
+          NODE_ENV: production
+          PORT: "8765"
+        run: |
+          node dist/server.js &
+          pid=$!
+          for i in $(seq 1 30); do
+            if curl -sf "http://127.0.0.1:8765/health"; then
+              kill "$pid"
+              exit 0
+            fi
+            sleep 1
+          done
+          kill "$pid" || true
+          exit 1
+      - name: Docker build and health check
+        env:
+          GOOGLE_CLIENT_ID: ci-client-id
+          GOOGLE_CLIENT_SECRET: ci-client-secret
+          GOOGLE_REDIRECT_URI: http://127.0.0.1:8766/auth/google/callback
+          SESSION_SECRET: ci-session-secret-at-least-32-chars-long
+          ALLOWED_EMAIL: ci@example.com
+          GITHUB_TOKEN: ghp_ci_token_placeholder_value
+        run: |
+          docker build -t commandcenter:ci .
+          cid=$(docker run -d -p 8766:3000 \
+            -e PORT=3000 \
+            -e NODE_ENV=production \
+            -e GOOGLE_CLIENT_ID \
+            -e GOOGLE_CLIENT_SECRET \
+            -e GOOGLE_REDIRECT_URI \
+            -e SESSION_SECRET \
+            -e ALLOWED_EMAIL \
+            -e GITHUB_TOKEN \
+            commandcenter:ci)
+          for i in $(seq 1 30); do
+            if curl -sf "http://127.0.0.1:8766/health"; then
+              docker rm -f "$cid"
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$cid"
+          docker rm -f "$cid"
+          exit 1
